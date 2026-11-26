@@ -1,9 +1,14 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { X, Bot, Sparkles, Send, Copy, RefreshCw, Zap, Brain, FileText, MessageSquare } from 'lucide-react';
+import type { Message } from '../App';
+
+const API_BASE = 'http://127.0.0.1:8000';
 
 interface AIAgentProps {
   chatName: string;
+  chatId: string;
+  messages: Message[];
   onClose: () => void;
   standalone?: boolean;
 }
@@ -15,74 +20,71 @@ interface AIMessage {
 }
 
 const quickActions = [
-  { icon: Brain, label: 'Анализ тона', desc: 'Определи настроение переписки' },
-  { icon: FileText, label: 'Саммари', desc: 'Краткое содержание чата' },
-  { icon: Zap, label: 'Предложить ответ', desc: 'AI предложит ответ' },
-  { icon: MessageSquare, label: 'Перевести', desc: 'Перевести сообщение' },
+  { icon: Brain, label: 'Анализ тона', prompt: 'Определи настроение последней переписки' },
+  { icon: FileText, label: 'Саммари', prompt: 'Сделай краткое содержание переписки' },
+  { icon: Zap, label: 'Предложить ответ', prompt: 'Предложи ответ на последнее сообщение' },
+  { icon: MessageSquare, label: 'Перевести', prompt: 'Переведи последнее сообщение на английский' },
 ];
 
-const sampleConversation: AIMessage[] = [
-  {
-    id: '1',
-    role: 'user',
-    content: 'Проанализируй переписку с Алексеем Петровым. О чём речь и какой тон общения?'
-  },
-  {
-    id: '2',
-    role: 'assistant',
-    content: `📊 **Анализ переписки с Алексеем Петровым:**
-
-**Тема:** Обсуждение рабочего проекта (разработка)
-
-**Тон:** Деловой, дружелюбный. Обе стороны конструктивны.
-
-**Ключевые моменты:**
-• Проект идёт по плану
-• Фронтенд завершается
-• Демо запланировано на завтра к обеду
-
-**Рекомендация:** Всё под контролем, можно подготовить демо-презентацию заранее.
-
-**Срочность:** 🟢 Низкая — сроки соблюдаются.`
-  },
-];
-
-export default function AIAgent({ chatName, onClose, standalone }: AIAgentProps) {
-  const [messages, setMessages] = useState<AIMessage[]>(sampleConversation);
+export default function AIAgent({ chatName, chatId, messages, onClose, standalone }: AIAgentProps) {
+  const [aiMessages, setAiMessages] = useState<AIMessage[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
 
-  const handleSend = () => {
-    if (!input.trim()) return;
+  const formatConversation = () => {
+    if (messages.length === 0) return 'Переписка пуста';
+    return messages
+      .slice(-15)
+      .map(m => `[${m.time}] ${m.sender === 'me' ? 'Я' : chatName}: ${m.text}`)
+      .join('\n');
+  };
+
+  const handleSend = async (customPrompt?: string) => {
+    const text = customPrompt || input;
+    if (!text.trim()) return;
 
     const userMsg: AIMessage = {
       id: Date.now().toString(),
       role: 'user',
-      content: input
+      content: text
     };
 
-    setMessages(prev => [...prev, userMsg]);
-    setInput('');
+    setAiMessages(prev => [...prev, userMsg]);
+    if (!customPrompt) setInput('');
     setIsTyping(true);
 
-    // Simulate AI response
-    setTimeout(() => {
-      const aiMsg: AIMessage = {
+    // Build prompt with conversation context
+    const conversation = formatConversation();
+    const fullPrompt = `Контекст переписки с "${chatName}":\n${conversation}\n\nЗапрос пользователя: ${text}\n\nОтветь на русском языке:`;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/ai/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: fullPrompt }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const aiMsg: AIMessage = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: data.response || 'Нет ответа от AI',
+        };
+        setAiMessages(prev => [...prev, aiMsg]);
+      } else {
+        throw new Error('API error');
+      }
+    } catch (e) {
+      const errorMsg: AIMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: `🤖 Я проанализировал ваш запрос касательно "${chatName}". 
-
-Вот что я могу предложить:
-
-1. **Контекст:** Переписка носит деловой характер
-2. **Действия:** Можно ответить в течение дня
-3. **Тон ответа:** Рекомендую сохранить дружелюбный деловой стиль
-
-Хотите, чтобы я подготовил черновик ответа?`
+        content: '⚠️ Ошибка подключения к бэкенду. Убедитесь что бэкенд запущен на http://127.0.0.1:8000',
       };
-      setMessages(prev => [...prev, aiMsg]);
+      setAiMessages(prev => [...prev, errorMsg]);
+    } finally {
       setIsTyping(false);
-    }, 2000);
+    }
   };
 
   const containerClass = standalone
@@ -106,7 +108,7 @@ export default function AIAgent({ chatName, onClose, standalone }: AIAgentProps)
             <h3 className="text-white font-semibold text-sm">Qwen AI Ассистент</h3>
             <p className="text-[#8B90A0] text-xs flex items-center gap-1">
               <Sparkles className="w-3 h-3 text-[#7C5CFC]" />
-              Анализирует: {chatName}
+              {chatName}
             </p>
           </div>
         </div>
@@ -121,26 +123,31 @@ export default function AIAgent({ chatName, onClose, standalone }: AIAgentProps)
       </div>
 
       {/* Quick Actions */}
-      {!standalone && (
-        <div className="grid grid-cols-2 gap-2 mb-4 flex-shrink-0">
-          {quickActions.map((action, i) => (
-            <motion.button
-              key={i}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              className="p-3 rounded-xl bg-[#141722] border border-[#2A2F45] hover:border-[#7C5CFC]/50 transition-all text-left group"
-            >
-              <action.icon className="w-4 h-4 text-[#7C5CFC] mb-1.5 group-hover:text-[#2AABEE] transition-colors" />
-              <p className="text-white text-xs font-medium">{action.label}</p>
-              <p className="text-[#8B90A0] text-[10px] mt-0.5">{action.desc}</p>
-            </motion.button>
-          ))}
-        </div>
-      )}
+      <div className="grid grid-cols-2 gap-2 mb-4 flex-shrink-0">
+        {quickActions.map((action, i) => (
+          <motion.button
+            key={i}
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={() => handleSend(action.prompt)}
+            className="p-3 rounded-xl bg-[#141722] border border-[#2A2F45] hover:border-[#7C5CFC]/50 transition-all text-left group"
+          >
+            <action.icon className="w-4 h-4 text-[#7C5CFC] mb-1.5 group-hover:text-[#2AABEE] transition-colors" />
+            <p className="text-white text-xs font-medium">{action.label}</p>
+            <p className="text-[#8B90A0] text-[10px] mt-0.5">{action.prompt.slice(0, 30)}...</p>
+          </motion.button>
+        ))}
+      </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto space-y-4 mb-4">
-        {messages.map((msg) => (
+        {aiMessages.length === 0 && (
+          <div className="text-center text-[#8B90A0] text-sm py-8">
+            <Bot className="w-8 h-8 mx-auto mb-2 opacity-50" />
+            <p>Задайте вопрос AI или используйте быстрые действия</p>
+          </div>
+        )}
+        {aiMessages.map((msg) => (
           <motion.div
             key={msg.id}
             initial={{ opacity: 0, y: 10 }}
@@ -157,7 +164,10 @@ export default function AIAgent({ chatName, onClose, standalone }: AIAgentProps)
               <div className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</div>
               {msg.role === 'assistant' && (
                 <div className="flex items-center gap-2 mt-2 pt-2 border-t border-[#2A2F45]/50">
-                  <button className="text-[#8B90A0] hover:text-white transition-colors">
+                  <button
+                    onClick={() => navigator.clipboard.writeText(msg.content)}
+                    className="text-[#8B90A0] hover:text-white transition-colors"
+                  >
                     <Copy className="w-3.5 h-3.5" />
                   </button>
                   <button className="text-[#8B90A0] hover:text-white transition-colors">
@@ -200,14 +210,14 @@ export default function AIAgent({ chatName, onClose, standalone }: AIAgentProps)
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
-            onClick={handleSend}
+            onClick={() => handleSend()}
             className="p-2.5 rounded-xl bg-gradient-to-r from-[#7C5CFC] to-[#2AABEE] text-white"
           >
             <Send className="w-4 h-4" />
           </motion.button>
         </div>
         <p className="text-[10px] text-[#8B90A0] mt-2 text-center">
-          Powered by Qwen AI • Анализирует контекст переписки
+          Powered by Qwen AI • Контекст: {messages.length} сообщений
         </p>
       </div>
     </motion.div>
