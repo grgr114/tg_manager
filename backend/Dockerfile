@@ -3,10 +3,10 @@
 
 FROM python:3.11-slim
 
-# Устанавливаем Node.js для qwen-code-sdk
+# Устанавливаем Node.js 22 для qwen-code-sdk
 RUN apt-get update && apt-get install -y \
     curl \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

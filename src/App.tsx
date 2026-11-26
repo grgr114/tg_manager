@@ -9,7 +9,8 @@ import ConnectionPanel from './components/ConnectionPanel';
 import FilterList from './components/FilterList';
 import CalendarView from './components/CalendarView';
 
-const API_BASE = 'http://127.0.0.1:8000';
+// Относительные URL — работают через nginx proxy на любом хосте
+const API_BASE = '';
 
 export type View = 'chats' | 'analytics' | 'agent' | 'settings' | 'filters' | 'calendar';
 
@@ -171,7 +172,9 @@ export default function App() {
 
     const connect = () => {
       try {
-        ws = new WebSocket('ws://127.0.0.1:8000/ws');
+        // Динамический протокол WS/WSS в зависимости от страницы
+        const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
 
         ws.onopen = () => {
           console.log('WebSocket connected');

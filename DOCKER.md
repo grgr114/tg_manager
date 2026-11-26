@@ -76,11 +76,11 @@ docker-compose logs -f
 
 ## 🔐 Первая авторизация Telegram
 
-При первом запуске Telethon запросит авторизацию:
+**ВАЖНО:** Используйте `docker compose run`, а НЕ `up -d` для первой авторизации!
 
 ```bash
-# Посмотрите логи backend
-docker-compose logs -f backend
+# Запуск в интерактивном режиме для ввода credentials
+docker compose run --rm backend
 ```
 
 Вы увидите запрос:
@@ -104,7 +104,14 @@ Please enter your password:
 
 Введите пароль.
 
+После успешной авторизации нажмите `Ctrl+C` для остановки.
+
 ✅ Сессия сохранится в Docker volume `telethon_sessions` и будет доступна после перезапуска.
+
+Теперь запустите сервисы в background:
+```bash
+docker compose up -d
+```
 
 ## 📊 Управление контейнерами
 
