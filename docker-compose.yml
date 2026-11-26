@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  # Backend: FastAPI + Telethon + Qwen
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: teleqwen-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - TG_API_ID=${TG_API_ID}
+      - TG_API_HASH=${TG_API_HASH}
+      - TG_SESSION=/app/sessions/teleqwen
+    volumes:
+      # Сохраняем сессию Telethon между перезапусками
+      - telethon_sessions:/app/sessions
+    restart: unless-stopped
+    networks:
+      - teleqwen-network
+
+  # Frontend: React + nginx
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: teleqwen-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - teleqwen-network
+
+volumes:
+  telethon_sessions:
+    driver: local
+
+networks:
+  teleqwen-network:
+    driver: bridge

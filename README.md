@@ -241,6 +241,27 @@ npm run dev
 - **AI:** Qwen (через qwen-code-sdk с OAuth)
 - **Telegram:** MTProto protocol (Telethon)
 
+## 🐳 Docker Deployment
+
+Быстрое развёртывание в Docker:
+
+```bash
+# 1. Настройте .env
+cp .env.docker.example .env
+nano .env  # заполните TG_API_ID и TG_API_HASH
+
+# 2. Авторизуйтесь в Qwen на хосте
+qwen /auth
+
+# 3. Соберите и запустите
+docker-compose build
+docker-compose up -d
+
+# 4. Откройте http://localhost
+```
+
+**Подробная документация:** [DOCKER.md](./DOCKER.md)
+
 ## 📄 Лицензия
 
 MIT
