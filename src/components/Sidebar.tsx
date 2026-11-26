@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { MessageSquare, BarChart3, Bot, Settings, Wifi, WifiOff } from 'lucide-react';
+import { MessageSquare, BarChart3, Bot, Settings, Wifi, WifiOff, Filter, Calendar } from 'lucide-react';
 import type { View } from '../App';
 
 interface SidebarProps {
@@ -12,6 +12,8 @@ interface SidebarProps {
 export default function Sidebar({ currentView, setCurrentView, isConnected, totalUnread }: SidebarProps) {
   const navItems = [
     { id: 'chats' as View, icon: MessageSquare, label: 'Чаты', badge: totalUnread },
+    { id: 'filters' as View, icon: Filter, label: 'Фильтры' },
+    { id: 'calendar' as View, icon: Calendar, label: 'Календарь' },
     { id: 'analytics' as View, icon: BarChart3, label: 'Аналитика' },
     { id: 'agent' as View, icon: Bot, label: 'AI Агент' },
     { id: 'settings' as View, icon: Settings, label: 'Настройки' },

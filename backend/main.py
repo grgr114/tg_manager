@@ -57,6 +57,8 @@ class AppState:
     cooldowns: dict[int, float] = {}  # peer_id -> last_response_time
     ws_clients: set[WebSocket] = set()
     event_log: list[dict[str, Any]] = []
+    filters: dict[int, bool] = {}  # chat_id -> auto_reply_enabled
+    calendar_events: list[dict[str, Any]] = []  # extracted events
 
 state = AppState()
 
@@ -161,6 +163,48 @@ async def ask_qwen_raw(prompt: str) -> str | None:
         return None
 
 
+async def extract_calendar_events(conversation: str, chat_name: str) -> list[dict]:
+    """Ask Qwen to extract calendar events from conversation."""
+    prompt = f"""Проанализируй переписку и извлеки все события/встречи/дедлайны.
+
+Переписка с "{chat_name}":
+{conversation}
+
+Верни ТОЛЬКО JSON массив событий в формате:
+[
+  {{
+    "title": "Название события",
+    "date": "YYYY-MM-DD HH:MM",
+    "description": "Описание",
+    "source": "{chat_name}"
+  }}
+]
+
+Если событий нет, верни пустой массив: []
+НЕ добавляй никакой текст кроме JSON."""
+
+    result = await ask_qwen_raw(prompt)
+    if not result:
+        return []
+
+    try:
+        # Try to parse JSON from response
+        import json
+        # Find JSON in response (might have markdown code blocks)
+        if "```json" in result:
+            result = result.split("```json")[1].split("```")[0]
+        elif "```" in result:
+            result = result.split("```")[1].split("```")[0]
+        
+        events = json.loads(result.strip())
+        if isinstance(events, list):
+            return events
+    except Exception as e:
+        log.warning("Failed to parse calendar events: %s", e)
+    
+    return []
+
+
 async def ask_qwen(context_messages: list[dict], chat_name: str) -> str | None:
     """
     Ask Qwen to generate a reply or SKIP.
@@ -258,6 +302,45 @@ async def on_new_message(event):
         "text": event.message.text or "",
     })
 
+    # Check filter - is auto-reply enabled for this chat?
+    if peer in state.filters and not state.filters[peer]:
+        log.info("Auto-reply disabled for '%s' by filter", chat_name)
+        broadcast_ws({"type": "filter_skip", "chat_id": peer, "chat_name": chat_name})
+        return
+
+    # Extract calendar events from conversation (async, don't block reply)
+    try:
+        history_for_calendar = []
+        async for msg in state.tg_client.iter_messages(peer, limit=20):
+            if msg.text:
+                sender_name = "Я" if msg.out else chat_name
+                history_for_calendar.append({
+                    "sender": sender_name,
+                    "text": msg.text,
+                    "time": msg.date.strftime("%H:%M %d.%m"),
+                })
+        history_for_calendar.reverse()
+        
+        if history_for_calendar:
+            conversation_text = "\n".join(
+                f"[{m['time']}] {m['sender']}: {m['text']}" for m in history_for_calendar
+            )
+            new_events = await extract_calendar_events(conversation_text, chat_name)
+            if new_events:
+                for ev in new_events:
+                    ev["id"] = str(len(state.calendar_events) + 1)
+                    ev["created_at"] = datetime.now(timezone.utc).isoformat()
+                state.calendar_events.extend(new_events)
+                log.info("Extracted %d calendar events from '%s'", len(new_events), chat_name)
+                broadcast_ws({
+                    "type": "calendar_events_added",
+                    "chat_name": chat_name,
+                    "count": len(new_events),
+                    "events": new_events,
+                })
+    except Exception as e:
+        log.warning("Calendar extraction failed for '%s': %s", chat_name, e)
+
     # Cooldown check
     now = time.time()
     last = state.cooldowns.get(peer, 0)
@@ -271,7 +354,7 @@ async def on_new_message(event):
         })
         return
 
-    # Gather context
+    # Gather context for reply
     try:
         history = []
         async for msg in state.tg_client.iter_messages(peer, limit=BUSY_CONTEXT_MESSAGES):
@@ -484,6 +567,17 @@ class AskResponse(BaseModel):
     response: str
 
 
+class FilterUpdate(BaseModel):
+    enabled: bool
+
+
+class CalendarEventCreate(BaseModel):
+    title: str
+    date: str  # ISO format
+    description: str = ""
+    source_chat: str = ""
+
+
 @app.post("/api/ai/ask", response_model=AskResponse)
 async def ask_ai(req: AskRequest):
     """Send a custom prompt to Qwen and return the response."""
@@ -494,6 +588,96 @@ async def ask_ai(req: AskRequest):
 @app.get("/api/events")
 async def get_events(limit: int = 50):
     return state.event_log[-limit:]
+
+
+# ---------------------------------------------------------------------------
+# Filters API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/filters")
+async def get_filters():
+    """Get list of chats with auto-reply filter status."""
+    if not state.tg_client or not state.tg_connected:
+        return []
+
+    filters = []
+    async for dialog in state.tg_client.iter_dialogs(limit=100):
+        entity = dialog.entity
+        if entity is None:
+            continue
+
+        chat_id = dialog.id
+        name = get_peer_name(entity)
+        chat_type = get_peer_type(entity)
+        avatar = get_peer_avatar(entity)
+
+        # Default: enabled (True) if not in filters dict
+        enabled = state.filters.get(chat_id, True)
+
+        filters.append({
+            "id": str(chat_id),
+            "name": name,
+            "avatar": avatar,
+            "type": chat_type,
+            "auto_reply": enabled,
+        })
+
+    return filters
+
+
+@app.post("/api/filters/{chat_id}")
+async def update_filter(chat_id: int, req: FilterUpdate):
+    """Toggle auto-reply for a specific chat."""
+    state.filters[chat_id] = req.enabled
+    broadcast_ws({
+        "type": "filter_changed",
+        "chat_id": str(chat_id),
+        "enabled": req.enabled,
+    })
+    log.info("Filter changed for %s: %s", chat_id, req.enabled)
+    return {"chat_id": str(chat_id), "auto_reply": req.enabled}
+
+
+# ---------------------------------------------------------------------------
+# Calendar API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/calendar")
+async def get_calendar():
+    """Get all calendar events."""
+    return state.calendar_events
+
+
+@app.post("/api/calendar")
+async def create_calendar_event(req: CalendarEventCreate):
+    """Manually create a calendar event."""
+    event = {
+        "id": str(len(state.calendar_events) + 1),
+        "title": req.title,
+        "date": req.date,
+        "description": req.description,
+        "source": req.source_chat,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    state.calendar_events.append(event)
+    broadcast_ws({
+        "type": "calendar_event_created",
+        "event": event,
+    })
+    log.info("Calendar event created: %s", req.title)
+    return event
+
+
+@app.delete("/api/calendar/{event_id}")
+async def delete_calendar_event(event_id: str):
+    """Delete a calendar event."""
+    state.calendar_events = [e for e in state.calendar_events if e.get("id") != event_id]
+    broadcast_ws({
+        "type": "calendar_event_deleted",
+        "event_id": event_id,
+    })
+    log.info("Calendar event deleted: %s", event_id)
+    return {"deleted": event_id}
 
 
 # ---------------------------------------------------------------------------

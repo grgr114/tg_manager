@@ -6,10 +6,12 @@ import ChatView from './components/ChatView';
 import AIAgent from './components/AIAgent';
 import Analytics from './components/Analytics';
 import ConnectionPanel from './components/ConnectionPanel';
+import FilterList from './components/FilterList';
+import CalendarView from './components/CalendarView';
 
 const API_BASE = 'http://127.0.0.1:8000';
 
-export type View = 'chats' | 'analytics' | 'agent' | 'settings';
+export type View = 'chats' | 'analytics' | 'agent' | 'settings' | 'filters' | 'calendar';
 
 export interface Chat {
   id: string;
@@ -41,6 +43,23 @@ export interface WSEvent {
   [key: string]: any;
 }
 
+export interface Filter {
+  id: string;
+  name: string;
+  avatar: string;
+  type: 'private' | 'group' | 'channel';
+  auto_reply: boolean;
+}
+
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  date: string;
+  description: string;
+  source: string;
+  created_at: string;
+}
+
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('chats');
   const [selectedChat, setSelectedChat] = useState<string | null>(null);
@@ -50,6 +69,8 @@ export default function App() {
   const [showAIAgent, setShowAIAgent] = useState(false);
   const [wsEvents, setWsEvents] = useState<WSEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filters, setFilters] = useState<Filter[]>([]);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
 
   // Fetch status from backend
   const fetchStatus = useCallback(async () => {
@@ -93,6 +114,56 @@ export default function App() {
     }
   }, []);
 
+  // Fetch filters
+  const fetchFilters = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/filters`);
+      if (res.ok) {
+        const data = await res.json();
+        setFilters(data);
+      }
+    } catch (e) {
+      console.error('Failed to fetch filters:', e);
+    }
+  }, []);
+
+  // Fetch calendar events
+  const fetchCalendar = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/calendar`);
+      if (res.ok) {
+        const data = await res.json();
+        setCalendarEvents(data);
+      }
+    } catch (e) {
+      console.error('Failed to fetch calendar:', e);
+    }
+  }, []);
+
+  // Toggle filter
+  const toggleFilter = async (chatId: string, enabled: boolean) => {
+    try {
+      await fetch(`${API_BASE}/api/filters/${chatId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      setFilters(prev => prev.map(f => f.id === chatId ? { ...f, auto_reply: enabled } : f));
+    } catch (e) {
+      console.error('Failed to toggle filter:', e);
+    }
+  };
+
+  // Delete calendar event
+  const deleteCalendarEvent = async (eventId: string) => {
+    try {
+      await fetch(`${API_BASE}/api/calendar/${eventId}`, { method: 'DELETE' });
+      setCalendarEvents(prev => prev.filter(e => e.id !== eventId));
+    } catch (e) {
+      console.error('Failed to delete calendar event:', e);
+    }
+  };
+
   // WebSocket connection
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -123,6 +194,14 @@ export default function App() {
             } else if (data.type === 'incoming_message' || data.type === 'ai_replied') {
               // Refresh chats list
               fetchChats();
+            } else if (data.type === 'filter_changed') {
+              setFilters(prev => prev.map(f => f.id === data.chat_id ? { ...f, auto_reply: data.enabled } : f));
+            } else if (data.type === 'calendar_events_added') {
+              fetchCalendar();
+            } else if (data.type === 'calendar_event_created') {
+              setCalendarEvents(prev => [...prev, data.event]);
+            } else if (data.type === 'calendar_event_deleted') {
+              setCalendarEvents(prev => prev.filter(e => e.id !== data.event_id));
             }
           } catch (e) {
             console.error('WS message parse error:', e);
@@ -154,7 +233,9 @@ export default function App() {
   useEffect(() => {
     fetchStatus();
     fetchChats();
-  }, [fetchStatus, fetchChats]);
+    fetchFilters();
+    fetchCalendar();
+  }, [fetchStatus, fetchChats, fetchFilters, fetchCalendar]);
 
   // Fetch messages when chat is selected
   useEffect(() => {
@@ -282,6 +363,38 @@ export default function App() {
                 status={status}
                 onToggleBusy={toggleBusy}
                 wsEvents={wsEvents}
+              />
+            </motion.div>
+          )}
+
+          {currentView === 'filters' && (
+            <motion.div
+              key="filters"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex-1 overflow-auto"
+            >
+              <FilterList
+                filters={filters}
+                onToggle={toggleFilter}
+                onRefresh={fetchFilters}
+              />
+            </motion.div>
+          )}
+
+          {currentView === 'calendar' && (
+            <motion.div
+              key="calendar"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex-1 overflow-auto"
+            >
+              <CalendarView
+                events={calendarEvents}
+                onDelete={deleteCalendarEvent}
+                onRefresh={fetchCalendar}
               />
             </motion.div>
           )}
